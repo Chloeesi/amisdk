@@ -70,3 +70,134 @@ Player.prototype.setupCallbacks_ = function() {
 Player.prototype.broadcast_ = function(message) {
   this.imaMessageBus_.broadcast(message);
 };
+/**
+ * Creates new AdsLoader and adds listeners.
+ * @private
+ */
+Player.prototype.initIMA_ = function() {
+  this.currentContentTime_ = 0;
+  var adDisplayContainer = new google.ima.AdDisplayContainer(
+      document.getElementById('adContainer'), this.mediaElement_);
+  adDisplayContainer.initialize();
+  this.adsLoader_ = new google.ima.AdsLoader(adDisplayContainer);
+  this.adsLoader_.addEventListener(
+      google.ima.AdsManagerLoadedEvent.Type.ADS_MANAGER_LOADED,
+      this.onAdsManagerLoaded_.bind(this), false);
+  this.adsLoader_.addEventListener(google.ima.AdErrorEvent.Type.AD_ERROR,
+      this.onAdError_.bind(this), false);
+  this.adsLoader_.addEventListener(google.ima.AdEvent.Type.ALL_ADS_COMPLETED,
+      this.onAllAdsCompleted_.bind(this), false);
+};
+
+/**
+ * Once the ads have been retrieved, use AdsManager to play the ads. Sends AdsManager
+ * playAdsAfterTime if starting in the middle of content.
+ * @param {ima.AdsManagerLoadedEvent} adsManagerLoadedEvent The loaded event.
+ * @private
+ */
+Player.prototype.onAdsManagerLoaded_ = function(adsManagerLoadedEvent) {
+  var adsRenderingSettings = new google.ima.AdsRenderingSettings();
+  adsRenderingSettings.playAdsAfterTime = this.currentContentTime_;
+
+  console.log(this.mediaElement_);
+  // Get the ads manager.
+  this.adsManager_ = adsManagerLoadedEvent.getAdsManager(
+    this.mediaElement_, adsRenderingSettings);
+
+  // Add listeners to the required events.
+  this.adsManager_.addEventListener(
+      google.ima.AdErrorEvent.Type.AD_ERROR,
+      this.onAdError_.bind(this));
+  this.adsManager_.addEventListener(
+      google.ima.AdEvent.Type.CONTENT_PAUSE_REQUESTED,
+      this.onContentPauseRequested_.bind(this));
+  this.adsManager_.addEventListener(
+      google.ima.AdEvent.Type.CONTENT_RESUME_REQUESTED,
+      this.onContentResumeRequested_.bind(this));
+
+  try {
+    this.adsManager_.init(this.mediaElement_.width, this.mediaElement_.height,
+        google.ima.ViewMode.FULLSCREEN);
+    this.adsManager_.start();
+  } catch (adError) {
+    // An error may be thrown if there was a problem with the VAST response.
+    this.broadcast_('Ads Manager Error: ' + adError.getMessage());
+  }
+};
+/**
+ * Handles errors from AdsLoader and AdsManager.
+ * @param {ima.AdErrorEvent} adErrorEvent error
+ * @private
+ */
+Player.prototype.onAdError_ = function(adErrorEvent) {
+  this.broadcast_('Ad Error: ' + adErrorEvent.getError().toString());
+  // Handle the error logging.
+  if (this.adsManager_) {
+    this.adsManager_.destroy();
+  }
+  this.mediaElement_.play();
+};
+
+/**
+ * When content is paused by AdsManager to start playing an ad.
+ * @private
+ */
+Player.prototype.onContentPauseRequested_ = function() {
+  this.currentContentTime_ = this.mediaElement_.currentTime;
+  this.broadcast_('onContentPauseRequested,' + this.currentContentTime_);
+  this.mediaManager_.onEnded = function(event) {};
+  this.mediaManager_.onSeek = function(event) {};
+};
+
+/**
+ * When an ad finishes playing and AdsManager resumes content.
+ * @private
+ */
+Player.prototype.onContentResumeRequested_ = function() {
+  this.broadcast_('onContentResumeRequested');
+  this.mediaManager_.onEnded = this.originalOnEnded_.bind(this.mediaManager_);
+  this.mediaManager_.onSeek = this.originalOnSeek_.bind(this.mediaManager_);
+
+  this.originalOnLoad_(this.originalOnLoadEvent_);
+  this.seek_(this.currentContentTime_);
+};
+
+/**
+ * Destroys AdsManager when all requested ads have finished playing.
+ * @private
+ */
+Player.prototype.onAllAdsCompleted_ = function() {
+  if (this.adsManager_) {
+    this.adsManager_.destroy();
+  }
+};
+
+/**
+ * Sets time video should seek to when content resumes and requests ad tag.
+ * @param {!string} adTag ad tag to be requested.
+ * @param {!float} currentTime time of content video we should resume from.
+ * @private
+ */
+Player.prototype.requestAd_ = function(adTag, currentTime) {
+  if (currentTime != 0) {
+    this.currentContentTime_ = currentTime;
+  }
+  var adsRequest = new google.ima.AdsRequest();
+  adsRequest.adTagUrl = adTag;
+  adsRequest.linearAdSlotWidth = this.mediaElement_.width;
+  adsRequest.linearAdSlotHeight = this.mediaElement_.height;
+  adsRequest.nonLinearAdSlotWidth = this.mediaElement_.width;
+  adsRequest.nonLinearAdSlotHeight = this.mediaElement_.height / 3;
+  this.adsLoader_.requestAds(adsRequest);
+};
+
+/**
+ * Seeks content video.
+ * @param {!float} time time to seek to.
+ * @private
+ */
+Player.prototype.seek_ = function(time) {
+  this.currentContentTime_ = time;
+  this.mediaElement_.currentTime = time;
+  this.mediaElement_.play();
+};
